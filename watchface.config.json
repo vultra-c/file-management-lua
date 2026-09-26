@@ -1,0 +1,12 @@
+{
+  "projectName": "FileManager",
+  "watchfaceId": "1460220037",
+  "power_consumption": "3",
+  "resourceBin": {
+    "lvglVersion": 9,
+    "colorFormat": "I8",
+    "compress": "NONE",
+    "input": "watchface/fprj/images/preview.png",
+    "name": "preview"
+  }
+}

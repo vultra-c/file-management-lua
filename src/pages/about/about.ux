@@ -1,0 +1,78 @@
+<template>
+  <div class="page" style="flex-direction: column;{{animStyle}}">
+
+    <list class="list" style="padding: 110px 6px 96px;" id="aboutList">
+      <list-item for="{{visibleItems}}" tid="key" class="item fm-item" type="about">
+        <div class="item-content">
+          <text class="fm-item__name">{{$item.name}}</text>
+          <text class="fm-item__meta">{{$item.value}}</text>
+        </div>
+      </list-item>
+      <list-item type="footer" class="list-padding"></list-item>
+    </list>
+
+    <!-- 顶部栏 -->
+    <img static src="/common/images/hd.png" style="position: absolute; left: 0px; top: 0px; width: 336px; height: 102px;" />
+    <img static src="/common/images/back.png" @click="goBack" style="position: absolute; left: 6px; top: 6px; width: 72px; height: 72px;" />
+    <text style="position: absolute; left: 78px; top: 6px; width: 180px; line-height: 30px; font-weight: bold; font-size: 24px; color: rgba(255,255,255,0.6); text-align: center;">{{nowTime}}</text>
+    <text static style="position: absolute; left: 78px; top: 36px; width: 180px; line-height: 42px; font-weight: bold; font-size: 32px; color: white; text-align: center;">关于</text>
+
+  </div>
+</template>
+
+<script>
+import router from '@system.router'
+import { onTimeChange, offTimeChange } from '../../common/clock.js'
+import pageAnim from '../../common/utils/pageAnim.js'
+
+const INFO = [
+  { key: 'name', name: '应用', value: '文件管理' },
+  { key: 'pkg', name: '包名', value: 'com.vultra.fmanager' },
+  { key: 'ver', name: '版本', value: '1.0.0 (100)' },
+  { key: 'device', name: '目标设备', value: '小米手环 9 Pro' },
+  { key: 'runtime', name: '提权方式', value: 'Lua 表盘特权后端' },
+  { key: 'ipc', name: '通信通道', value: 'internal://files/fm_*.json' },
+  { key: 'ops', name: '支持操作', value: '浏览/新建/重命名/复制/移动/删除/搜索' },
+  { key: 'repo', name: '源码', value: 'github.com/vultra-c/file-management-lua' }
+]
+
+export default {
+  private: {
+    animStyle: pageAnim.enterStyle,
+    nowTime: '00:00',
+    __unsubClock: null,
+    visibleItems: INFO
+  },
+
+  onInit() {
+    this.__unsubClock = onTimeChange((t) => {
+      if (this.$valid) this.nowTime = t
+    })
+  },
+
+  onDestroy() {
+    if (this.__unsubClock) {
+      offTimeChange(this.__unsubClock)
+      this.__unsubClock = null
+    }
+  },
+
+  goBack() {
+    pageAnim.markBack()
+    router.back()
+  },
+
+  onBackPress() {
+    this.goBack()
+    return true
+  }
+}
+</script>
+
+<style>
+  @import '../../common/style.css';
+  .list-padding {
+    height: 90px;
+    width: 100%;
+  }
+</style>

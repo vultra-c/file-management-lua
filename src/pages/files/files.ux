@@ -1,0 +1,315 @@
+<template>
+  <div class="page" style="flex-direction: column;{{animStyle}}" @swipe="onSwipe">
+
+    <!-- 加载中 -->
+    <div if="{{loading}}" style="position: absolute; left: 0px; top: 200px; width: 336px; height: 80px; flex-direction: column; justify-content: center; align-items: center;">
+      <text static style="font-size: 24px; color: rgba(255,255,255,0.6);">读取中…</text>
+    </div>
+
+    <!-- 错误 -->
+    <div if="{{!loading && errorText}}" style="position: absolute; left: 0px; top: 160px; width: 336px; height: 220px; flex-direction: column; justify-content: center; align-items: center;">
+      <img static src="/common/images/error.png" style="width: 96px; height: 96px;" />
+      <text style="line-height: 34px; font-weight: bold; font-size: 24px; color: rgba(255,255,255,0.6); text-align: center; margin-top: 16px; padding: 0 24px;">{{errorText}}</text>
+    </div>
+
+    <!-- 空目录 -->
+    <div if="{{!loading && !errorText && visibleItems.length == 0}}" style="position: absolute; left: 0px; top: 170px; width: 336px; height: 220px; flex-direction: column; justify-content: center; align-items: center;">
+      <img static src="/common/images/empty_state.png" style="width: 96px; height: 96px;" />
+      <text static style="line-height: 36px; font-weight: bold; font-size: 24px; color: rgba(255,255,255,0.4); text-align: center; margin-top: 16px;">空目录</text>
+    </div>
+
+    <!-- 路径条 -->
+    <div class="path-bar" if="{{!errorText}}">
+      <text class="path-bar__text">{{currentPath}}</text>
+    </div>
+
+    <!-- 文件列表 -->
+    <list class="list list--files" if="{{!loading && visibleItems.length > 0}}" id="fileList">
+      <list-item for="{{visibleItems}}" tid="id"
+        class="item fm-item {{$item.enter && !$item.revealed ? 'item--enter' : ''}} {{$item.enter && $item.revealed ? 'item--shown' : ''}} {{pressedId === $item.id ? 'item--pressed' : ''}}"
+        type="file" @click="onItemClick($item)" @longpress="onItemLongPress($item)">
+        <img src="{{$item.icon}}" class="fm-item__icon" />
+        <div class="item-content">
+          <text class="fm-item__name">{{$item.name}}</text>
+          <text class="fm-item__meta">{{$item.subtitle}}</text>
+        </div>
+        <img static src="/common/images/enter.png" class="fm-item__arrow" />
+      </list-item>
+      <list-item type="footer" class="list-padding"></list-item>
+    </list>
+
+    <!-- 顶部栏 -->
+    <img static src="/common/images/hd.png" style="position: absolute; left: 0px; top: 0px; width: 336px; height: 102px;" />
+    <img static src="/common/images/back.png" @click="goBack" style="position: absolute; left: 6px; top: 6px; width: 72px; height: 72px;" />
+    <img static src="/common/images/more.png" @click="goSettings" style="position: absolute; left: 258px; top: 6px; width: 72px; height: 72px;" />
+    <text style="position: absolute; left: 78px; top: 6px; width: 180px; line-height: 30px; font-weight: bold; font-size: 24px; color: rgba(255,255,255,0.6); text-align: center;">{{nowTime}}</text>
+    <text style="position: absolute; left: 78px; top: 36px; width: 180px; line-height: 42px; font-weight: bold; font-size: 32px; color: white; text-align: center; lines: 1; text-overflow: ellipsis;">{{pageTitle}}</text>
+
+    <!-- 底部操作栏 -->
+    <div class="action-bar" if="{{!errorText}}">
+      <div class="btn" style="flex: 1; margin-right: 10px;" @click="cycleSort">
+        <text class="btn__text">{{sortLabel}}</text>
+      </div>
+      <div class="btn {{pressedAction === 'new' ? 'btn--pressed' : ''}}" style="flex: 1; margin-right: 10px;" @click="goNew">
+        <text class="btn__text">新建</text>
+      </div>
+      <div class="btn btn--primary {{pressedAction === 'paste' ? 'btn--primary btn--pressed' : ''}}"
+        style="flex: 1;" @click="doPaste">
+        <text class="btn__text">{{pasteLabel}}</text>
+      </div>
+    </div>
+
+  </div>
+</template>
+
+<script>
+import router from '@system.router'
+import prompt from '@system.prompt'
+import { onTimeChange, offTimeChange } from '../../common/clock.js'
+import pageAnim from '../../common/utils/pageAnim.js'
+import appState from '../../common/utils/appState.js'
+import bridge from '../../common/utils/bridge.js'
+import { normalize, parentOf, basename, formatSize, formatTime, fileKind } from '../../common/utils/format.js'
+
+const SORT_MODES = [
+  { key: 'name', label: '按名称' },
+  { key: 'size', label: '按大小' },
+  { key: 'time', label: '按时间' }
+]
+
+export default {
+  private: {
+    animStyle: pageAnim.enterStyle,
+    nowTime: '00:00',
+    __unsubClock: null,
+    loading: false,
+    errorText: '',
+    currentPath: '/',
+    pageTitle: '',
+    allItems: [],
+    visibleItems: [],
+    pressedId: '',
+    pressedAction: '',
+    sortIndex: 0,
+    sortLabel: '按名称',
+    hasClipboard: false,
+    clipboardPath: '',
+    clipboardMode: '',
+    pasteLabel: '粘贴',
+    isNavigating: false
+  },
+
+  protected: {
+    path: '/data'
+  },
+
+  onInit() {
+    this.__unsubClock = onTimeChange((t) => {
+      if (this.$valid) this.nowTime = t
+    })
+    this.currentPath = normalize(this.path || '/data')
+    this.pageTitle = basename(this.currentPath)
+    this.syncClipboard()
+    this.sortIndex = Number(appState.getState().sortIndex) || 0
+    this.sortLabel = SORT_MODES[this.sortIndex].label
+  },
+
+  /** 同步剪贴板状态：按钮文案区分「复制」与「移动」 */
+  syncClipboard() {
+    const s = appState.getState()
+    this.hasClipboard = !!s.clipboardSource
+    this.clipboardPath = s.clipboardSource || ''
+    this.clipboardMode = s.clipboardMode || ''
+    this.pasteLabel = this.hasClipboard ? (this.clipboardMode === 'move' ? '移动到' : '复制到') : '粘贴'
+  },
+
+  onShow() {
+    pageAnim.playReturn(this)
+    this.isNavigating = false
+    this.pressedId = ''
+    this.syncClipboard()
+    this.loadDir(this.currentPath, false)
+  },
+
+  onDestroy() {
+    if (this.__unsubClock) {
+      offTimeChange(this.__unsubClock)
+      this.__unsubClock = null
+    }
+  },
+
+  loadDir(path, animate) {
+    const that = this
+    this.loading = true
+    this.errorText = ''
+    this.currentPath = normalize(path)
+    this.pageTitle = basename(this.currentPath)
+    appState.setLastPath(this.currentPath)
+
+    bridge.list(this.currentPath).then(function (data) {
+      if (!that.$valid) return
+      that.loading = false
+      that.allItems = that.buildItems((data && data.items) || [])
+      that.visibleItems = that.allItems
+      if (animate) {
+        if (pageAnim.markReveal(that, that.allItems)) {
+          pageAnim.playReveal(that, that.allItems)
+        }
+      }
+    }).catch(function (e) {
+      if (!that.$valid) return
+      that.loading = false
+      that.allItems = []
+      that.visibleItems = []
+      that.errorText = (e && e.message) ? e.message : '读取失败'
+    })
+  },
+
+  buildItems(raw) {
+    const mode = SORT_MODES[this.sortIndex].key
+    const items = []
+    for (let i = 0; i < raw.length; i++) {
+      const r = raw[i]
+      const kind = r.isDir ? 'dir' : fileKind(r.name)
+      items.push({
+        id: 'f' + i + '_' + r.path,
+        name: r.name,
+        path: r.path,
+        isDir: !!r.isDir,
+        kind: kind,
+        icon: r.isDir
+          ? '/common/images/ic_folder.png'
+          : (kind === 'image' ? '/common/images/ic_image.png' : '/common/images/ic_file.png'),
+        size: Number(r.sizeBytes) || 0,
+        mtime: Number(r.mtime) || 0,
+        subtitle: r.isDir
+          ? '文件夹 · ' + formatTime(r.mtime)
+          : formatSize(r.sizeBytes) + ' · ' + formatTime(r.mtime)
+      })
+    }
+    items.sort(function (a, b) {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
+      if (mode === 'size') return b.size - a.size
+      if (mode === 'time') return b.mtime - a.mtime
+      return a.name.toLowerCase() < b.name.toLowerCase() ? -1 : (a.name > b.name ? 1 : 0)
+    })
+    return items
+  },
+
+  cycleSort() {
+    this.sortIndex = (this.sortIndex + 1) % SORT_MODES.length
+    this.sortLabel = SORT_MODES[this.sortIndex].label
+    appState.getState().sortIndex = this.sortIndex
+    if (this.allItems.length) {
+      this.allItems = this.buildItems(this.allItems.map(function (i) {
+        return { name: i.name, path: i.path, isDir: i.isDir, sizeBytes: i.size, mtime: i.mtime }
+      }))
+      this.visibleItems = this.allItems
+    }
+  },
+
+  onItemClick(item) {
+    if (this.isNavigating || !item) return
+    this.isNavigating = true
+    this.pressedId = item.id
+    const that = this
+    setTimeout(function () {
+      if (!that.$valid) return
+      that.pressedId = ''
+      that.openItem(item)
+    }, pageAnim.pressMs)
+  },
+
+  openItem(item) {
+    if (item.isDir) {
+      this.loadDir(item.path, true)
+      this.isNavigating = false
+      return
+    }
+    router.push({ uri: '/pages/fileInfo', params: { path: item.path } })
+  },
+
+  onItemLongPress(item) {
+    if (!item) return
+    this.isNavigating = true
+    this.pressedId = item.id
+    const that = this
+    setTimeout(function () {
+      if (!that.$valid) return
+      that.pressedId = ''
+      that.isNavigating = false
+      if (item.isDir) {
+        router.push({ uri: '/pages/fileInfo', params: { path: item.path } })
+      } else {
+        router.push({ uri: '/pages/fileInfo', params: { path: item.path } })
+      }
+    }, pageAnim.pressMs)
+  },
+
+  goNew() {
+    this.pressedAction = 'new'
+    const that = this
+    setTimeout(function () {
+      if (!that.$valid) return
+      that.pressedAction = ''
+      router.push({ uri: '/pages/newItem', params: { mode: 'choose', path: that.currentPath } })
+    }, pageAnim.pressMs)
+  },
+
+  doPaste() {
+    const that = this
+    if (!this.hasClipboard) {
+      prompt.showToast({ message: '请先在文件详情页复制或移动' })
+      return
+    }
+    this.pressedAction = 'paste'
+    setTimeout(function () {
+      if (!that.$valid) return
+      that.pressedAction = ''
+      const s = appState.getState()
+      const mode = s.clipboardMode
+      const op = mode === 'move' ? bridge.move : bridge.copy
+      op.call(bridge, s.clipboardSource, that.currentPath)
+        .then(function () {
+          appState.clearClipboard()
+          prompt.showToast({ message: mode === 'move' ? '移动完成' : '复制完成' })
+          that.loadDir(that.currentPath, false)
+        })
+        .catch(function (e) {
+          prompt.showToast({ message: (e && e.message) || '操作失败' })
+        })
+    }, pageAnim.pressMs)
+  },
+
+  goSettings() {
+    router.push({ uri: '/pages/settings' })
+  },
+
+  goBack() {
+    const parent = parentOf(this.currentPath)
+    if (parent && parent !== this.currentPath) {
+      this.loadDir(parent, true)
+      return
+    }
+    pageAnim.markBack()
+    router.back()
+  },
+
+  onSwipe(e) {
+    if (e.direction === 'right') this.goBack()
+  },
+
+  onBackPress() {
+    this.goBack()
+    return true
+  }
+}
+</script>
+
+<style>
+  @import '../../common/style.css';
+  .list-padding {
+    height: 100px;
+    width: 100%;
+  }
+</style>

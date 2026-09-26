@@ -1,0 +1,27 @@
+{
+  "name": "com.vultra.fmanager",
+  "version": "1.0.0",
+  "description": "文件管理 - 小米 Vela 轻应用（Lua 表盘提权后端）",
+  "private": true,
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "start": "aiot server --watch --open-nuttx",
+    "watch": "aiot watch --open-nuttx",
+    "build": "aiot build",
+    "release": "aiot release --enable-jsc",
+    "icons": "node scripts/gen-icons.mjs",
+    "face:build": "sh ./scripts/build-face.sh",
+    "build:all": "sh ./scripts/build-all.sh"
+  },
+  "devDependencies": {
+    "aiot-toolkit": "2.0.5"
+  },
+  "dependencies": {
+    "@aiot-toolkit/jsc": "^1.0.7"
+  },
+  "browserslist": [
+    "chrome 65"
+  ]
+}

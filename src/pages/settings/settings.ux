@@ -1,0 +1,174 @@
+<template>
+  <div class="page" style="flex-direction: column;{{animStyle}}">
+
+    <list class="list" style="padding: 110px 6px 96px;" id="settingsList">
+      <list-item for="{{visibleItems}}" tid="key" class="item fm-item {{pressedId === $item.key ? 'item--pressed' : ''}}"
+        type="setting" @click="onItemClick($item)">
+        <div class="item-content">
+          <text class="fm-item__name">{{$item.name}}</text>
+          <text class="fm-item__meta">{{$item.subtitle}}</text>
+        </div>
+        <img if="{{$item.tappable}}" static src="/common/images/enter.png" class="fm-item__arrow" />
+      </list-item>
+      <list-item type="footer" class="list-padding"></list-item>
+    </list>
+
+    <!-- 顶栏 -->
+    <img static src="/common/images/hd.png" style="position: absolute; left: 0px; top: 0px; width: 336px; height: 102px;" />
+    <img static src="/common/images/back.png" @click="goBack" style="position: absolute; left: 6px; top: 6px; width: 72px; height: 72px;" />
+    <text style="position: absolute; left: 78px; top: 6px; width: 180px; line-height: 30px; font-weight: bold; font-size: 24px; color: rgba(255,255,255,0.6); text-align: center;">{{nowTime}}</text>
+    <text static style="position: absolute; left: 78px; top: 36px; width: 180px; line-height: 42px; font-weight: bold; font-size: 32px; color: white; text-align: center;">设置</text>
+
+  </div>
+</template>
+
+<script>
+import router from '@system.router'
+import prompt from '@system.prompt'
+import storage from '@system.storage'
+import { onTimeChange, offTimeChange } from '../../common/clock.js'
+import pageAnim from '../../common/utils/pageAnim.js'
+import appState from '../../common/utils/appState.js'
+import bridge from '../../common/utils/bridge.js'
+
+const SORT_LABELS = ['按名称', '按大小', '按时间']
+const VIBRATE_KEY = 'fm_keyboard_vibrate'
+
+export default {
+  private: {
+    animStyle: pageAnim.enterStyle,
+    nowTime: '00:00',
+    __unsubClock: null,
+    backendOnline: false,
+    backendText: '检测中…',
+    sortIndex: 0,
+    vibrateMode: '关',
+    clipboardText: '无',
+    visibleItems: [],
+    pressedId: ''
+  },
+
+  onInit() {
+    this.__unsubClock = onTimeChange((t) => {
+      if (this.$valid) this.nowTime = t
+    })
+    this.loadSettings()
+  },
+
+  onShow() {
+    pageAnim.playReturn(this)
+    this.loadSettings()
+  },
+
+  onDestroy() {
+    if (this.__unsubClock) {
+      offTimeChange(this.__unsubClock)
+      this.__unsubClock = null
+    }
+  },
+
+  loadSettings() {
+    const that = this
+    const s = appState.getState()
+    this.sortIndex = Number(s.sortIndex) || 0
+    this.clipboardText = s.clipboardSource ? (s.clipboardMode === 'move' ? '移动：' : '复制：') + s.clipboardSource : '无'
+    storage.get({
+      key: VIBRATE_KEY,
+      success: (v) => {
+        if (!that.$valid) return
+        that.vibrateMode = v === 'long' ? '长震' : (v === 'short' ? '短震' : '关')
+        that.buildItems()
+      },
+      fail: () => {
+        if (!that.$valid) return
+        that.vibrateMode = '关'
+        that.buildItems()
+      }
+    })
+    bridge.refreshBackend().then(function (st) {
+      if (!that.$valid) return
+      that.backendOnline = st.online
+      that.backendText = st.online
+        ? '在线 · ' + ((st.info && st.info.product) || '设备')
+        : '离线 · 请启用 Lua 表盘'
+      that.buildItems()
+    }).catch(function () {
+      if (!that.$valid) return
+      that.backendOnline = false
+      that.backendText = '离线 · 请启用 Lua 表盘'
+      that.buildItems()
+    })
+  },
+
+  buildItems() {
+    this.visibleItems = [
+      { key: 'backend', name: '表盘后端', subtitle: this.backendText },
+      { key: 'sort', name: '列表排序', subtitle: SORT_LABELS[this.sortIndex], tappable: true },
+      { key: 'vibrate', name: '键盘震动', subtitle: this.vibrateMode, tappable: true },
+      { key: 'clipboard', name: '剪贴板', subtitle: this.clipboardText, tappable: true },
+      { key: 'about', name: '关于', subtitle: '版本与工作原理', tappable: true }
+    ]
+  },
+
+  onItemClick(item) {
+    if (!item || item.key === 'backend') return
+    this.pressedId = item.key
+    const that = this
+    setTimeout(function () {
+      if (!that.$valid) return
+      that.pressedId = ''
+      that.handle(item.key)
+    }, pageAnim.pressMs)
+  },
+
+  handle(key) {
+    if (key === 'sort') {
+      this.sortIndex = (this.sortIndex + 1) % SORT_LABELS.length
+      appState.getState().sortIndex = this.sortIndex
+      this.buildItems()
+      return
+    }
+    if (key === 'vibrate') {
+      const order = ['关', '短震', '长震']
+      const next = order[(order.indexOf(this.vibrateMode) + 1) % order.length]
+      this.vibrateMode = next
+      this.buildItems()
+      storage.set({
+        key: VIBRATE_KEY,
+        value: next === '长震' ? 'long' : (next === '短震' ? 'short' : ''),
+        success: () => {},
+        fail: () => {}
+      })
+      return
+    }
+    if (key === 'clipboard') {
+      appState.clearClipboard()
+      this.clipboardText = '无'
+      this.buildItems()
+      prompt.showToast({ message: '剪贴板已清空' })
+      return
+    }
+    if (key === 'about') {
+      router.push({ uri: '/pages/about' })
+    }
+  },
+
+  goBack() {
+    pageAnim.markBack()
+    router.back()
+  },
+
+  onBackPress() {
+    this.goBack()
+    return true
+  }
+}
+</script>
+
+<style>
+  @import '../../common/style.css';
+  .list-padding {
+    height: 90px;
+    width: 100%;
+  }
+</style>

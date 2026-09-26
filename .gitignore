@@ -1,0 +1,27 @@
+# 依赖与构建产物
+node_modules/
+build/
+dist/
+.temp_*/
+*.log
+
+# 表盘构建产物
+bin/
+watchface/fprj/output/
+watchface/data/
+watchface/tools/Compiler.exe
+watchface/tools/*.zip
+
+# 签名材料 —— 严禁提交，CI 通过 Secrets 还原
+*.jks
+*.keystore
+keystore.properties
+sign/
+cert/
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*~

@@ -1,0 +1,205 @@
+<import name="input-method" src="../../components/InputMethod/InputMethod.ux"></import>
+
+<template>
+  <div class="page" style="flex-direction: column;{{animStyle}}">
+
+    <!-- 原文 -->
+    <div style="position: absolute; left: 14px; top: 142px; width: 308px; height: 176px; padding: 14px 18px; border-radius: 36px; background-color: #1c1c1e; flex-direction: column;">
+      <text class="panel__title">原文件（{{originLabel}}）</text>
+      <text class="panel__text" style="height: 120px; lines: 4;">{{originText}}</text>
+    </div>
+
+    <!-- 编辑缓冲区 -->
+    <div style="position: absolute; left: 14px; top: 330px; width: 308px; height: 72px; padding: 10px 18px; border-radius: 24px; background-color: #262626; flex-direction: column;">
+      <text style="font-size: 20px; color: rgba(255,255,255,0.5);">{{modeLabel}}</text>
+      <text style="font-size: 24px; font-weight: bold; color: white; lines: 1; text-overflow: ellipsis;">{{bufferPreview || '（空，点击下方输入）'}}</text>
+    </div>
+
+    <!-- 操作栏 -->
+    <div style="position: absolute; left: 14px; top: 410px; width: 308px; flex-direction: row;">
+      <div class="btn" style="width: 90px; margin-right: 8px;" @click="toggleMode">
+        <text class="btn__text">{{overwrite ? '追加' : '覆盖'}}</text>
+      </div>
+      <div class="btn" style="width: 90px; margin-right: 8px;" @click="openKeyboard">
+        <text class="btn__text">输入</text>
+      </div>
+      <div class="btn" style="width: 90px; margin-right: 8px;" @click="clearBuffer">
+        <text class="btn__text">清空</text>
+      </div>
+      <div class="btn btn--primary" style="flex: 1;" @click="save">
+        <text class="btn__text">保存</text>
+      </div>
+    </div>
+
+    <input-method
+      hide="{{hideKeyboard}}"
+      keyboardtype="QWERTY"
+      screentype="rect"
+      maxlength="300"
+      vibratemode="{{vibrateMode}}"
+      @complete="onComplete"
+      @delete="onDelete"
+    ></input-method>
+
+    <!-- 顶部栏 -->
+    <img static src="/common/images/hd.png" style="position: absolute; left: 0px; top: 0px; width: 336px; height: 102px;" />
+    <img static src="/common/images/back.png" @click="goBack" style="position: absolute; left: 6px; top: 6px; width: 72px; height: 72px;" />
+    <text style="position: absolute; left: 78px; top: 6px; width: 180px; line-height: 30px; font-weight: bold; font-size: 24px; color: rgba(255,255,255,0.6); text-align: center;">{{nowTime}}</text>
+    <text style="position: absolute; left: 78px; top: 36px; width: 180px; line-height: 42px; font-weight: bold; font-size: 32px; color: white; text-align: center; lines: 1; text-overflow: ellipsis;">文本编辑</text>
+
+  </div>
+</template>
+
+<script>
+import router from '@system.router'
+import prompt from '@system.prompt'
+import { onTimeChange, offTimeChange } from '../../common/clock.js'
+import pageAnim from '../../common/utils/pageAnim.js'
+import appState from '../../common/utils/appState.js'
+import bridge from '../../common/utils/bridge.js'
+import { basename, formatSize } from '../../common/utils/format.js'
+
+const LOAD_LIMIT = 4096
+const SAVE_LIMIT = 8192
+
+export default {
+  private: {
+    animStyle: pageAnim.fadeStyle,
+    nowTime: '00:00',
+    __unsubClock: null,
+    originText: '',
+    originLabel: '',
+    buffer: '',
+    bufferPreview: '',
+    overwrite: false,
+    modeLabel: '追加模式：保存后追加到末尾',
+    hideKeyboard: true,
+    vibrateMode: '',
+    saving: false
+  },
+
+  protected: {
+    path: ''
+  },
+
+  onInit() {
+    this.__unsubClock = onTimeChange((t) => {
+      if (this.$valid) this.nowTime = t
+    })
+    if (this.$app.$def && this.$app.$def.getKeyboardVibrateMode) {
+      this.vibrateMode = this.$app.$def.getKeyboardVibrateMode()
+    }
+    this.updateModeLabel()
+    this.load()
+  },
+
+  onDestroy() {
+    if (this.__unsubClock) {
+      offTimeChange(this.__unsubClock)
+      this.__unsubClock = null
+    }
+  },
+
+  load() {
+    const that = this
+    bridge.text(this.path, LOAD_LIMIT).then(function (data) {
+      if (!that.$valid) return
+      that.originText = (data && data.content) || '（空文件）'
+      that.originLabel = formatSize(data ? data.totalBytes : 0) + ' · ' + basename(that.path)
+    }).catch(function (e) {
+      if (!that.$valid) return
+      that.originText = '读取失败：' + ((e && e.message) || e)
+      that.originLabel = basename(that.path)
+    })
+  },
+
+  updateModeLabel() {
+    this.modeLabel = this.overwrite ? '覆盖模式：保存后清空原内容' : '追加模式：保存后追加到末尾'
+  },
+
+  toggleMode() {
+    this.overwrite = !this.overwrite
+    this.updateModeLabel()
+  },
+
+  openKeyboard() {
+    this.hideKeyboard = !this.hideKeyboard
+  },
+
+  onComplete(e) {
+    if (e && e.detail && e.detail.content) {
+      this.buffer = (this.buffer + e.detail.content).slice(0, SAVE_LIMIT)
+      this.bufferPreview = this.buffer
+    }
+  },
+
+  onDelete() {
+    if (this.buffer.length > 0) {
+      this.buffer = this.buffer.substring(0, this.buffer.length - 1)
+      this.bufferPreview = this.buffer
+    }
+  },
+
+  clearBuffer() {
+    this.buffer = ''
+    this.bufferPreview = ''
+  },
+
+  save() {
+    if (this.saving) return
+    if (!this.buffer && !this.overwrite) {
+      prompt.showToast({ message: '请先输入内容' })
+      return
+    }
+    this.saving = true
+    const that = this
+    if (this.overwrite) {
+      this.commit(this.buffer, '覆盖完成')
+      return
+    }
+    bridge.text(this.path, LOAD_LIMIT).then(function (data) {
+      if (!that.$valid) return
+      const origin = (data && data.content) || ''
+      if (origin.length + that.buffer.length > SAVE_LIMIT) {
+        that.saving = false
+        prompt.showToast({ message: '内容过长，无法追加' })
+        return
+      }
+      that.commit(origin + that.buffer, '追加完成')
+    }).catch(function (e) {
+      if (!that.$valid) return
+      that.saving = false
+      prompt.showToast({ message: (e && e.message) || '读取失败' })
+    })
+  },
+
+  commit(content, msg) {
+    const that = this
+    bridge.write(this.path, content).then(function () {
+      if (!that.$valid) return
+      prompt.showToast({ message: msg })
+      appState.requestRefresh()
+      pageAnim.markBack()
+      router.back()
+    }).catch(function (e) {
+      if (!that.$valid) return
+      that.saving = false
+      prompt.showToast({ message: (e && e.message) || '保存失败' })
+    })
+  },
+
+  goBack() {
+    pageAnim.markBack()
+    router.back()
+  },
+
+  onBackPress() {
+    this.goBack()
+    return true
+  }
+}
+</script>
+
+<style>
+  @import '../../common/style.css';
+</style>

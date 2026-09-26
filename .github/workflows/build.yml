@@ -1,0 +1,114 @@
+name: build
+
+# 触发时机：推送到 main、PR、以及手动触发
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quickapp:
+    name: 轻应用 .rpk
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 运行 Lua 后端单元测试
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lua5.3
+          lua5.3 scripts/test-lua-backend.lua
+
+      # 签名材料：仓库不存证书，用 Secrets 还原到 sign/release/
+      # 未配置 FM_CERT 时回退到自签名，保证流水线始终可产出可安装包
+      - name: 还原签名材料
+        env:
+          FM_CERT: ${{ secrets.FM_CERT }}
+          FM_KEY: ${{ secrets.FM_KEY }}
+        run: |
+          set -eu
+          if [ -n "${FM_CERT:-}" ] && [ -n "${FM_KEY:-}" ]; then
+            mkdir -p sign/release
+            printf '%s' "$FM_CERT" > sign/release/certificate.pem
+            printf '%s' "$FM_KEY" > sign/release/private.pem
+            chmod 600 sign/release/private.pem
+            echo "::notice::已使用仓库 Secrets 中的签名材料"
+          else
+            echo "::notice::未配置 FM_CERT / FM_KEY，改用自签名证书"
+            sh ./scripts/gen-signing.sh
+          fi
+
+      - name: 构建 .rpk
+        run: npx --no-install aiot release --enable-jsc
+
+      - name: 收集产物
+        run: ls -la dist/
+
+      - name: 上传 .rpk
+        uses: actions/upload-artifact@v4
+        with:
+          name: fmanager-rpk
+          path: dist/*.rpk
+          if-no-files-found: error
+
+  watchface:
+    name: Lua 表盘 .face
+    # 表盘编译器是 .NET Framework 程序，内部用 Windows 风格的 '\' 拼路径，
+    # 只能在 Windows 上跑；因此这一组固定用 windows-latest（自带 Git Bash）。
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 准备表盘工程与预览图
+        run: |
+          node scripts/gen-fprj.mjs
+          node scripts/gen-preview.mjs
+
+      - name: 语法检查 Lua 源码
+        run: |
+          choco install lua --no-progress -y
+          luac -p watchface/fprj/app/lua/main.lua
+          echo "Lua 语法检查通过"
+
+      - name: 构建表盘
+        env:
+          WATCHFACE_ID: ${{ vars.WATCHFACE_ID }}
+        run: sh ./scripts/build-face.sh
+
+      - name: 上传表盘产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: fmanager-face
+          path: |
+            watchface/data/resource.bin
+            bin/FileManager
+          if-no-files-found: error

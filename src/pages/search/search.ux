@@ -1,0 +1,210 @@
+<import name="input-method" src="../../components/InputMethod/InputMethod.ux"></import>
+
+<template>
+  <div class="page" style="flex-direction: column;{{animStyle}}">
+
+    <div class="search-box" @click="toggleKeyboard">
+      <text class="{{keyword ? 'search-box__text' : 'search-box__placeholder'}}">{{keyword || '输入文件名关键字…'}}</text>
+    </div>
+
+    <div class="path-bar" style="top: 210px;" @click="cycleScope">
+      <text class="path-bar__text">范围：{{scopeLabel}}</text>
+    </div>
+
+    <!-- 搜索中 -->
+    <div if="{{searching}}" style="position: absolute; left: 0px; top: 280px; width: 336px; height: 60px; flex-direction: column; justify-content: center; align-items: center;">
+      <text static style="font-size: 24px; color: rgba(255,255,255,0.6);">搜索中…</text>
+    </div>
+
+    <!-- 结果为空 -->
+    <div if="{{!searching && searched && visibleItems.length == 0}}" style="position: absolute; left: 0px; top: 280px; width: 336px; height: 140px; flex-direction: column; justify-content: center; align-items: center;">
+      <img static src="/common/images/empty_state.png" style="width: 80px; height: 80px;" />
+      <text static style="line-height: 34px; font-weight: bold; font-size: 24px; color: rgba(255,255,255,0.4); text-align: center; margin-top: 12px;">没有匹配项</text>
+    </div>
+
+    <!-- 结果列表 -->
+    <list class="list" style="padding: 258px 6px 96px;" if="{{visibleItems.length > 0}}" id="searchList">
+      <list-item for="{{visibleItems}}" tid="id"
+        class="item fm-item {{pressedId === $item.id ? 'item--pressed' : ''}}"
+        type="result" @click="onItemClick($item)">
+        <img src="{{$item.icon}}" class="fm-item__icon" />
+        <div class="item-content">
+          <text class="fm-item__name">{{$item.name}}</text>
+          <text class="fm-item__meta">{{$item.subtitle}}</text>
+        </div>
+        <img static src="/common/images/enter.png" class="fm-item__arrow" />
+      </list-item>
+      <list-item type="footer" class="list-padding"></list-item>
+    </list>
+
+    <input-method
+      hide="{{hideKeyboard}}"
+      keyboardtype="QWERTY"
+      screentype="rect"
+      maxlength="20"
+      vibratemode="{{vibrateMode}}"
+      @complete="onComplete"
+      @delete="onDelete"
+    ></input-method>
+
+    <!-- 顶部栏 -->
+    <img static src="/common/images/hd.png" style="position: absolute; left: 0px; top: 0px; width: 336px; height: 102px;" />
+    <img static src="/common/images/back.png" @click="goBack" style="position: absolute; left: 6px; top: 6px; width: 72px; height: 72px;" />
+    <img static src="/common/images/search.png" @click="doSearch" style="position: absolute; left: 258px; top: 6px; width: 72px; height: 72px;" />
+    <text style="position: absolute; left: 78px; top: 6px; width: 180px; line-height: 30px; font-weight: bold; font-size: 24px; color: rgba(255,255,255,0.6); text-align: center;">{{nowTime}}</text>
+    <text static style="position: absolute; left: 78px; top: 36px; width: 180px; line-height: 42px; font-weight: bold; font-size: 32px; color: white; text-align: center;">搜索文件</text>
+
+  </div>
+</template>
+
+<script>
+import router from '@system.router'
+import prompt from '@system.prompt'
+import { onTimeChange, offTimeChange } from '../../common/clock.js'
+import pageAnim from '../../common/utils/pageAnim.js'
+import bridge from '../../common/utils/bridge.js'
+import { fileKind, shortPath } from '../../common/utils/format.js'
+
+const SCOPES = [
+  { path: '/data', label: '设备存储 /data' },
+  { path: '/data/quickapp/files/com.vultra.fmanager', label: '我的文件' }
+]
+
+function dirOf(path) {
+  const p = String(path || '')
+  const idx = p.lastIndexOf('/')
+  return idx > 0 ? p.slice(0, idx) : '/'
+}
+
+export default {
+  private: {
+    animStyle: pageAnim.fadeStyle,
+    nowTime: '00:00',
+    __unsubClock: null,
+    keyword: '',
+    hideKeyboard: true,
+    vibrateMode: '',
+    scopeIndex: 0,
+    scopeLabel: SCOPES[0].label,
+    searching: false,
+    searched: false,
+    visibleItems: [],
+    pressedId: '',
+    isNavigating: false
+  },
+
+  onInit() {
+    this.__unsubClock = onTimeChange((t) => {
+      if (this.$valid) this.nowTime = t
+    })
+    if (this.$app.$def && this.$app.$def.getKeyboardVibrateMode) {
+      this.vibrateMode = this.$app.$def.getKeyboardVibrateMode()
+    }
+  },
+
+  onDestroy() {
+    if (this.__unsubClock) {
+      offTimeChange(this.__unsubClock)
+      this.__unsubClock = null
+    }
+  },
+
+  toggleKeyboard() {
+    this.hideKeyboard = !this.hideKeyboard
+  },
+
+  onComplete(e) {
+    if (e && e.detail && e.detail.content) {
+      this.keyword = (this.keyword + e.detail.content).slice(0, 20)
+    }
+  },
+
+  onDelete() {
+    if (this.keyword.length > 0) {
+      this.keyword = this.keyword.substring(0, this.keyword.length - 1)
+    }
+  },
+
+  cycleScope() {
+    this.scopeIndex = (this.scopeIndex + 1) % SCOPES.length
+    this.scopeLabel = SCOPES[this.scopeIndex].label
+  },
+
+  doSearch() {
+    const kw = this.keyword.trim()
+    if (!kw) {
+      prompt.showToast({ message: '请输入关键字' })
+      return
+    }
+    if (this.searching) return
+    const that = this
+    this.searching = true
+    this.searched = true
+    this.hideKeyboard = true
+    bridge.search(SCOPES[this.scopeIndex].path, kw).then(function (data) {
+      if (!that.$valid) return
+      that.searching = false
+      const raw = (data && data.items) || []
+      const items = []
+      for (let i = 0; i < raw.length; i++) {
+        const r = raw[i]
+        const kind = r.isDir ? 'dir' : fileKind(r.name)
+        items.push({
+          id: 'r' + i + '_' + r.path,
+          name: r.name,
+          path: r.path,
+          isDir: !!r.isDir,
+          icon: r.isDir
+            ? '/common/images/ic_folder.png'
+            : (kind === 'image' ? '/common/images/ic_image.png' : '/common/images/ic_file.png'),
+          subtitle: shortPath(dirOf(r.path))
+        })
+      }
+      that.visibleItems = items
+      if (items.length === 0) {
+        prompt.showToast({ message: '没有匹配项' })
+      }
+    }).catch(function (e) {
+      if (!that.$valid) return
+      that.searching = false
+      that.visibleItems = []
+      prompt.showToast({ message: (e && e.message) || '搜索失败' })
+    })
+  },
+
+  onItemClick(item) {
+    if (this.isNavigating || !item) return
+    this.isNavigating = true
+    this.pressedId = item.id
+    const that = this
+    setTimeout(function () {
+      if (!that.$valid) return
+      that.pressedId = ''
+      that.isNavigating = false
+      if (item.isDir) {
+        router.push({ uri: '/pages/files', params: { path: item.path } })
+      } else {
+        router.push({ uri: '/pages/fileInfo', params: { path: item.path } })
+      }
+    }, pageAnim.pressMs)
+  },
+
+  goBack() {
+    pageAnim.markBack()
+    router.back()
+  },
+
+  onBackPress() {
+    this.goBack()
+    return true
+  }
+}
+</script>
+
+<style>
+  @import '../../common/style.css';
+  .list-padding {
+    height: 90px;
+    width: 100%;
+  }
+</style>

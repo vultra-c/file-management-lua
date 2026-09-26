@@ -1,0 +1,212 @@
+<import name="input-method" src="../../components/InputMethod/InputMethod.ux"></import>
+
+<template>
+  <div class="page" style="flex-direction: column;{{animStyle}}">
+
+    <!-- 选择类型（从列表页点「新建」进来） -->
+    <div if="{{mode === 'choose'}}">
+      <list class="list list--plain" id="chooseList">
+        <list-item for="{{choices}}" tid="key" class="item fm-item {{pressedKey === $item.key ? 'item--pressed' : ''}}"
+          type="choice" @click="onChoose($item)">
+          <img src="{{$item.icon}}" class="fm-item__icon" />
+          <div class="item-content">
+            <text class="fm-item__name">{{$item.label}}</text>
+            <text class="fm-item__meta">{{$item.desc}}</text>
+          </div>
+          <img static src="/common/images/enter.png" class="fm-item__arrow" />
+        </list-item>
+        <list-item type="footer" class="list-padding"></list-item>
+      </list>
+    </div>
+
+    <!-- 命名输入 -->
+    <div if="{{mode !== 'choose'}}">
+      <div class="input-box" @click="toggleKeyboard">
+        <text class="{{textValue ? 'input-box__text' : 'input-box__placeholder'}}">{{textValue || placeholder}}</text>
+      </div>
+      <text class="hint">点击输入框打开键盘 · 最多 {{maxLength}} 个字符</text>
+    </div>
+
+    <input-method
+      hide="{{hideKeyboard}}"
+      keyboardtype="QWERTY"
+      screentype="rect"
+      maxlength="{{maxLength}}"
+      vibratemode="{{vibrateMode}}"
+      @complete="onComplete"
+      @delete="onDelete"
+    ></input-method>
+
+    <!-- 顶部栏 -->
+    <img static src="/common/images/hd.png" style="position: absolute; left: 0px; top: 0px; width: 336px; height: 102px;" />
+    <img static src="/common/images/back.png" @click="goBack" style="position: absolute; left: 6px; top: 6px; width: 72px; height: 72px;" />
+    <img if="{{mode !== 'choose'}}" static src="/common/images/conform.png" @click="onConfirm" style="position: absolute; left: 258px; top: 6px; width: 72px; height: 72px;" />
+    <text style="position: absolute; left: 78px; top: 6px; width: 180px; line-height: 30px; font-weight: bold; font-size: 24px; color: rgba(255,255,255,0.6); text-align: center;">{{nowTime}}</text>
+    <text static style="position: absolute; left: 78px; top: 36px; width: 180px; line-height: 42px; font-weight: bold; font-size: 32px; color: white; text-align: center; lines: 1; text-overflow: ellipsis;">{{pageTitle}}</text>
+
+  </div>
+</template>
+
+<script>
+import router from '@system.router'
+import prompt from '@system.prompt'
+import { onTimeChange, offTimeChange } from '../../common/clock.js'
+import pageAnim from '../../common/utils/pageAnim.js'
+import appState from '../../common/utils/appState.js'
+import bridge from '../../common/utils/bridge.js'
+import { normalize, basename, isValidName } from '../../common/utils/format.js'
+
+export default {
+  private: {
+    animStyle: pageAnim.fadeStyle,
+    nowTime: '00:00',
+    __unsubClock: null,
+    textValue: '',
+    hideKeyboard: true,
+    vibrateMode: '',
+    pageTitle: '新建',
+    placeholder: '输入名称…',
+    maxLength: 40,
+    choices: [
+      { key: 'folder', label: '新建文件夹', desc: '创建一个空目录', icon: '/common/images/ic_folder.png' },
+      { key: 'file', label: '新建文本文件', desc: '创建后可直接编辑', icon: '/common/images/ic_file.png' }
+    ],
+    pressedKey: '',
+    submitting: false
+  },
+
+  protected: {
+    mode: 'folder',
+    path: '/data'
+  },
+
+  onInit() {
+    this.__unsubClock = onTimeChange((t) => {
+      if (this.$valid) this.nowTime = t
+    })
+    if (this.mode === 'rename') {
+      this.pageTitle = '重命名'
+      this.placeholder = '输入新名称…'
+      this.textValue = basename(this.path)
+    } else if (this.mode === 'file') {
+      this.pageTitle = '新建文件'
+      this.placeholder = '输入文件名…'
+    } else if (this.mode === 'folder') {
+      this.pageTitle = '新建文件夹'
+      this.placeholder = '输入文件夹名…'
+    } else {
+      this.pageTitle = '新建'
+    }
+    if (this.$app.$def && this.$app.$def.getKeyboardVibrateMode) {
+      this.vibrateMode = this.$app.$def.getKeyboardVibrateMode()
+    }
+  },
+
+  onDestroy() {
+    if (this.__unsubClock) {
+      offTimeChange(this.__unsubClock)
+      this.__unsubClock = null
+    }
+  },
+
+  onChoose(item) {
+    if (!item || this.isNavigating) return
+    this.pressedKey = item.key
+    this.isNavigating = true
+    const that = this
+    setTimeout(function () {
+      if (!that.$valid) return
+      that.mode = item.key
+      that.isNavigating = false
+      that.pressedKey = ''
+      that.hideKeyboard = false
+      that.pageTitle = item.key === 'folder' ? '新建文件夹' : '新建文件'
+      that.placeholder = item.key === 'folder' ? '输入文件夹名…' : '输入文件名…'
+    }, pageAnim.pressMs)
+  },
+
+  toggleKeyboard() {
+    if (this.mode === 'choose') return
+    this.hideKeyboard = !this.hideKeyboard
+  },
+
+  onComplete(e) {
+    if (e && e.detail && e.detail.content) {
+      this.textValue = this.textValue + e.detail.content
+    }
+  },
+
+  onDelete() {
+    if (this.textValue.length > 0) {
+      this.textValue = this.textValue.substring(0, this.textValue.length - 1)
+    }
+  },
+
+  onConfirm() {
+    if (this.submitting) return
+    const name = this.textValue.trim()
+    if (!isValidName(name)) {
+      prompt.showToast({ message: '名称不能为空或包含 / \\' })
+      return
+    }
+    this.submitting = true
+    const that = this
+    const mode = this.mode
+    const base = normalize(this.path)
+
+    let task
+    let doneMsg
+    if (mode === 'rename') {
+      task = bridge.rename(this.path, name)
+      doneMsg = '重命名完成'
+    } else if (mode === 'folder') {
+      task = bridge.mkdir(joinPath(base, name))
+      doneMsg = '文件夹已创建'
+    } else {
+      task = bridge.write(joinPath(base, name), '')
+      doneMsg = '文件已创建'
+    }
+
+    task.then(function () {
+      if (!that.$valid) return
+      prompt.showToast({ message: doneMsg })
+      appState.requestRefresh()
+      if (mode === 'file') {
+        pageAnim.markBack()
+        router.back()
+        return
+      }
+      setTimeout(function () {
+        pageAnim.markBack()
+        router.back()
+      }, 400)
+    }).catch(function (e) {
+      if (!that.$valid) return
+      that.submitting = false
+      prompt.showToast({ message: (e && e.message) || '操作失败' })
+    })
+  },
+
+  goBack() {
+    pageAnim.markBack()
+    router.back()
+  },
+
+  onBackPress() {
+    this.goBack()
+    return true
+  }
+}
+
+function joinPath(base, name) {
+  return base === '/' ? '/' + name : base + '/' + name
+}
+</script>
+
+<style>
+  @import '../../common/style.css';
+  .list-padding {
+    height: 90px;
+    width: 100%;
+  }
+</style>

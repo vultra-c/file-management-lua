@@ -1,0 +1,370 @@
+<template>
+  <div class="page" style="flex-direction: column;{{animStyle}}">
+
+    <!-- 信息视图 -->
+    <div if="{{mode === 'info'}}">
+      <div style="position: absolute; left: 14px; top: 142px; width: 308px; height: 140px; padding: 12px 18px; border-radius: 36px; background-color: #262626; flex-direction: column; justify-content: space-around;">
+        <div class="kv">
+          <text class="kv__key">名称</text>
+          <text class="kv__value">{{name}}</text>
+        </div>
+        <div class="kv">
+          <text class="kv__key">大小</text>
+          <text class="kv__value">{{sizeLabel}}</text>
+        </div>
+        <div class="kv">
+          <text class="kv__key">修改</text>
+          <text class="kv__value">{{mtimeLabel}}</text>
+        </div>
+        <div class="kv">
+          <text class="kv__key">类型</text>
+          <text class="kv__value">{{kindLabel}}</text>
+        </div>
+      </div>
+
+      <text style="position: absolute; left: 18px; top: 292px; width: 300px; font-size: 20px; line-height: 26px; color: rgba(255,255,255,0.4);">{{shortPath}}</text>
+
+      <div style="position: absolute; left: 14px; top: 322px; width: 308px; flex-direction: row; flex-wrap: wrap;">
+        <div for="{{actions}}" tid="key" class="{{item.cls}}"
+          style="width: 148px; height: 52px; margin-right: 12px; margin-bottom: 12px;"
+          @click="onAction(item)">
+          <text class="btn__text">{{item.label}}</text>
+        </div>
+      </div>
+    </div>
+
+    <!-- 文本 / Hex 视图 -->
+    <div if="{{mode === 'text' || mode === 'hex'}}">
+      <div class="panel" style="top: 142px; height: 214px;">
+        <text class="panel__text">{{viewerContent}}</text>
+      </div>
+      <text style="position: absolute; left: 18px; top: 366px; width: 300px; font-size: 20px; color: rgba(255,255,255,0.4);">{{viewerHint}}</text>
+      <div style="position: absolute; left: 14px; top: 400px; width: 308px; flex-direction: row; justify-content: space-between;">
+        <div class="btn" style="width: 96px; margin-right: 10px;" @click="prevPage">
+          <text class="btn__text">上一页</text>
+        </div>
+        <div class="btn" style="width: 96px; margin-right: 10px;" @click="nextPage">
+          <text class="btn__text">下一页</text>
+        </div>
+        <div class="btn btn--primary" style="flex: 1;" @click="backToInfo">
+          <text class="btn__text">返回</text>
+        </div>
+      </div>
+    </div>
+
+    <!-- 图片视图 -->
+    <div if="{{mode === 'image'}}">
+      <img if="{{imageUri}}" src="{{imageUri}}" class="image-view" @error="onImageError" />
+      <text if="{{!imageUri}}" style="position: absolute; left: 0px; top: 230px; width: 336px; line-height: 34px; font-size: 24px; color: rgba(255,255,255,0.5); text-align: center;">图片无法预览</text>
+      <div style="position: absolute; left: 14px; top: 408px; width: 308px; flex-direction: row;">
+        <div class="btn btn--primary" style="flex: 1;" @click="backToInfo">
+          <text class="btn__text">返回</text>
+        </div>
+      </div>
+    </div>
+
+    <!-- 顶部栏 -->
+    <img static src="/common/images/hd.png" style="position: absolute; left: 0px; top: 0px; width: 336px; height: 102px;" />
+    <img static src="/common/images/back.png" @click="goBack" style="position: absolute; left: 6px; top: 6px; width: 72px; height: 72px;" />
+    <text style="position: absolute; left: 78px; top: 6px; width: 180px; line-height: 30px; font-weight: bold; font-size: 24px; color: rgba(255,255,255,0.6); text-align: center;">{{nowTime}}</text>
+    <text style="position: absolute; left: 78px; top: 36px; width: 180px; line-height: 42px; font-weight: bold; font-size: 32px; color: white; text-align: center; lines: 1; text-overflow: ellipsis;">{{pageTitle}}</text>
+
+  </div>
+</template>
+
+<script>
+import router from '@system.router'
+import prompt from '@system.prompt'
+import { onTimeChange, offTimeChange } from '../../common/clock.js'
+import pageAnim from '../../common/utils/pageAnim.js'
+import appState from '../../common/utils/appState.js'
+import bridge from '../../common/utils/bridge.js'
+import { basename, formatSize, formatTime, fileKind, shortPath } from '../../common/utils/format.js'
+
+const TEXT_PAGE = 4096
+const HEX_PAGE = 512
+
+const KIND_LABEL = {
+  image: '图片',
+  text: '文本',
+  binary: '二进制'
+}
+
+function toHex(n) {
+  const v = Number(n) || 0
+  const s = v.toString(16).toUpperCase()
+  return s.length < 8 ? '0000000'.slice(0, 8 - s.length) + s : s
+}
+
+export default {
+  private: {
+    animStyle: pageAnim.fadeStyle,
+    nowTime: '00:00',
+    __unsubClock: null,
+    mode: 'info',
+    isDir: false,
+    name: '',
+    sizeLabel: '-',
+    mtimeLabel: '-',
+    kindLabel: '文件',
+    shortPath: '',
+    pageTitle: '',
+    actions: [],
+    pressedKey: '',
+    deleteArmed: false,
+    viewerContent: '',
+    viewerHint: '',
+    hexOffset: 0,
+    imageUri: ''
+  },
+
+  protected: {
+    path: ''
+  },
+
+  onInit() {
+    this.__unsubClock = onTimeChange((t) => {
+      if (this.$valid) this.nowTime = t
+    })
+    this.loadInfo()
+  },
+
+  onShow() {
+    if (this.mode === 'info') this.loadInfo()
+  },
+
+  onDestroy() {
+    if (this.__unsubClock) {
+      offTimeChange(this.__unsubClock)
+      this.__unsubClock = null
+    }
+  },
+
+  loadInfo() {
+    const that = this
+    this.name = basename(this.path)
+    this.pageTitle = this.name
+    this.shortPath = shortPath(this.path)
+    bridge.info(this.path).then(function (data) {
+      if (!that.$valid) return
+      const isDir = !!(data && data.isDir)
+      that.isDir = isDir
+      that.sizeLabel = isDir ? '目录' : formatSize(data.sizeBytes)
+      that.mtimeLabel = formatTime(data.mtime)
+      that.kindLabel = isDir ? '文件夹' : KIND_LABEL[fileKind(that.name)] || '文件'
+      that.buildActions()
+    }).catch(function (e) {
+      if (!that.$valid) return
+      that.sizeLabel = '-'
+      that.buildActions()
+      prompt.showToast({ message: (e && e.message) || '读取失败' })
+    })
+  },
+
+  buildActions() {
+    const list = []
+    if (this.isDir) {
+      list.push({ key: 'newchild', label: '新建子项', primary: true })
+      list.push({ key: 'open', label: '打开' })
+    } else {
+      const kind = fileKind(this.name)
+      if (kind === 'image') {
+        list.push({ key: 'image', label: '查看图片', primary: true })
+      }
+      if (kind === 'text') {
+        list.push({ key: 'text', label: '查看文本', primary: true })
+        list.push({ key: 'edit', label: '编辑保存' })
+        list.push({ key: 'hex', label: 'Hex 查看' })
+      } else {
+        list.push({ key: 'hex', label: 'Hex 查看', primary: true })
+      }
+    }
+    list.push({ key: 'copy', label: '复制' })
+    list.push({ key: 'move', label: '移动' })
+    list.push({ key: 'rename', label: '重命名' })
+    list.push({ key: 'delete', label: this.deleteArmed ? '确认删除' : '删除', danger: this.deleteArmed })
+    // 预拼好 class：Vela 的 style/class 属性不适合塞复杂三元表达式
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i]
+      let cls = 'btn'
+      if (a.danger) cls += ' btn--danger'
+      if (a.primary) cls += ' btn--primary'
+      if (this.pressedKey === a.key) cls += ' btn--pressed'
+      a.cls = cls
+    }
+    this.actions = list
+  },
+
+  onAction(item) {
+    if (!item) return
+    const key = item.key
+    this.pressedKey = key
+    this.buildActions()
+    const that = this
+    setTimeout(function () {
+      if (!that.$valid) return
+      that.pressedKey = ''
+      that.buildActions()
+      that.handle(key)
+    }, pageAnim.pressMs)
+  },
+
+  handle(key) {
+    const that = this
+    if (key === 'newchild') {
+      router.push({ uri: '/pages/newItem', params: { mode: 'choose', path: this.path } })
+      return
+    }
+    if (key === 'open') {
+      router.push({ uri: '/pages/files', params: { path: this.path } })
+      return
+    }
+    if (key === 'text') {
+      this.openText()
+      return
+    }
+    if (key === 'hex') {
+      this.openHex(0)
+      return
+    }
+    if (key === 'image') {
+      this.openImage()
+      return
+    }
+    if (key === 'edit') {
+      router.push({ uri: '/pages/textEditor', params: { path: this.path } })
+      return
+    }
+    if (key === 'copy') {
+      appState.setClipboard(this.path, 'copy')
+      prompt.showToast({ message: '已选择复制，去列表页粘贴' })
+      return
+    }
+    if (key === 'move') {
+      appState.setClipboard(this.path, 'move')
+      prompt.showToast({ message: '已选择移动，去列表页粘贴' })
+      return
+    }
+    if (key === 'rename') {
+      router.push({ uri: '/pages/newItem', params: { mode: 'rename', path: this.path } })
+      return
+    }
+    if (key === 'delete') {
+      if (!this.deleteArmed) {
+        this.deleteArmed = true
+        this.buildActions()
+        setTimeout(function () {
+          if (that.$valid) {
+            that.deleteArmed = false
+            that.buildActions()
+          }
+        }, 4000)
+        return
+      }
+      this.deleteArmed = false
+      this.doDelete()
+    }
+  },
+
+  doDelete() {
+    const that = this
+    bridge.remove(this.path).then(function () {
+      if (!that.$valid) return
+      prompt.showToast({ message: '删除完成' })
+      appState.requestRefresh()
+      pageAnim.markBack()
+      router.back()
+    }).catch(function (e) {
+      if (!that.$valid) return
+      that.deleteArmed = false
+      that.buildActions()
+      prompt.showToast({ message: (e && e.message) || '删除失败' })
+    })
+  },
+
+  openText() {
+    const that = this
+    bridge.text(this.path, TEXT_PAGE).then(function (data) {
+      if (!that.$valid) return
+      that.mode = 'text'
+      that.viewerContent = (data && data.content) || ''
+      that.viewerHint = '显示前 ' + (data && data.totalBytes ? Math.min(TEXT_PAGE, data.totalBytes) : 0) + ' 字节'
+    }).catch(function (e) {
+      prompt.showToast({ message: (e && e.message) || '读取失败' })
+    })
+  },
+
+  openHex(offset) {
+    const that = this
+    bridge.hex(this.path, offset, HEX_PAGE).then(function (data) {
+      if (!that.$valid) return
+      that.mode = 'hex'
+      that.hexOffset = offset
+      that.viewerContent = (data && data.content) || ''
+      that.viewerHint = '偏移 0x' + toHex(offset) + ' · 共 ' + formatSize(data ? data.totalBytes : 0)
+    }).catch(function (e) {
+      prompt.showToast({ message: (e && e.message) || '读取失败' })
+    })
+  },
+
+  openImage() {
+    const that = this
+    bridge.image(this.path).then(function (data) {
+      if (!that.$valid) return
+      that.mode = 'image'
+      that.imageUri = (data && data.uri) || ''
+    }).catch(function (e) {
+      if (!that.$valid) return
+      that.mode = 'image'
+      that.imageUri = ''
+      prompt.showToast({ message: (e && e.message) || '图片读取失败' })
+    })
+  },
+
+  onImageError() {
+    this.imageUri = ''
+  },
+
+  prevPage() {
+    if (this.mode === 'text') {
+      prompt.showToast({ message: '已经是第一页' })
+      return
+    }
+    const next = Math.max(0, this.hexOffset - HEX_PAGE)
+    this.openHex(next)
+  },
+
+  nextPage() {
+    if (this.mode === 'text') {
+      prompt.showToast({ message: '仅预览首页内容' })
+      return
+    }
+    this.openHex(this.hexOffset + HEX_PAGE)
+  },
+
+  backToInfo() {
+    this.mode = 'info'
+    this.viewerContent = ''
+    this.imageUri = ''
+    this.animStyle = pageAnim.fadeStyle
+  },
+
+  goBack() {
+    if (this.mode !== 'info') {
+      this.backToInfo()
+      return
+    }
+    pageAnim.markBack()
+    router.back()
+  },
+
+  onBackPress() {
+    this.goBack()
+    return true
+  }
+}
+</script>
+
+<style>
+  @import '../../common/style.css';
+</style>

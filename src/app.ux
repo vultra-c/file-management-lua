@@ -1,0 +1,47 @@
+<script>
+/**
+ * 文件管理 - 应用入口
+ *
+ * 这里只做两件事：
+ *   1. 暴露 $app.$def.bridge，页面通过它拿到共享状态与提权桥接客户端
+ *   2. 启动时清掉上一次异常退出残留的请求文件，避免表盘误读
+ */
+import file from '@system.file'
+import bridge from './common/utils/bridge.js'
+import appState from './common/utils/appState.js'
+
+export default {
+  bridge: bridge,
+  state: appState,
+
+  onCreate() {
+    this._resetIpcChannel()
+    // 后台刷新后端在线状态，页面 onShow 也会再刷一次
+    try {
+      bridge.refreshBackend().then((s) => {
+        appState.setBackend(s.online, s.info)
+      })
+    } catch (e) {
+      console.log('refreshBackend fail: ' + e)
+    }
+  },
+
+  /**
+   * 清理上一次会话遗留的请求/结果文件。
+   * 表盘侧的守卫令牌每次请求后都会轮换，残留请求必然校验失败并被丢弃，
+   * 这里提前删掉只是为了让首屏状态更干净。
+   */
+  _resetIpcChannel() {
+    var uris = [bridge.URI.request, bridge.URI.result]
+    for (var i = 0; i < uris.length; i++) {
+      try {
+        file.delete({ uri: uris[i], success: function () {}, fail: function () {} })
+      } catch (e) {}
+    }
+  },
+
+  onDestroy() {
+    console.log('文件管理 destroyed')
+  }
+}
+</script>

@@ -1,0 +1,188 @@
+<template>
+  <div class="page" style="flex-direction: column;{{animStyle}}" @swipe="onSwipe">
+
+    <!-- 后端状态条：Lua 表盘是否在线 -->
+    <div class="banner" @click="refreshBackend">
+      <div class="dot {{backendOnline ? '' : 'dot--off'}}"></div>
+      <text class="banner__text" style="margin-left: 12px;">{{backendText}}</text>
+    </div>
+
+    <!-- 入口列表 -->
+    <list class="list" if="{{visibleItems.length > 0}}" id="homeList">
+      <list-item for="{{visibleItems}}" tid="id"
+        class="item fm-item {{pressedId === $item.id ? 'item--pressed' : ''}}"
+        type="entry" @click="onItemClick($item)">
+        <img src="{{$item.icon}}" class="fm-item__icon" />
+        <div class="item-content">
+          <text class="fm-item__name">{{$item.name}}</text>
+          <text class="fm-item__meta">{{$item.subtitle}}</text>
+        </div>
+        <img static src="/common/images/enter.png" class="fm-item__arrow" />
+      </list-item>
+      <list-item type="footer" class="list-padding"></list-item>
+    </list>
+
+    <!-- 顶栏 -->
+    <img static src="/common/images/hd.png" style="position: absolute; left: 0px; top: 0px; width: 336px; height: 102px;" />
+    <img static src="/common/images/back.png" @click="exitApp" style="position: absolute; left: 6px; top: 6px; width: 72px; height: 72px;" />
+    <img static src="/common/images/more.png" @click="goSettings" style="position: absolute; left: 258px; top: 6px; width: 72px; height: 72px;" />
+    <text style="position: absolute; left: 78px; top: 6px; width: 180px; line-height: 30px; font-weight: bold; font-size: 24px; color: rgba(255,255,255,0.6); text-align: center;">{{nowTime}}</text>
+    <text static style="position: absolute; left: 78px; top: 36px; width: 180px; line-height: 42px; font-weight: bold; font-size: 32px; color: white; text-align: center;">文件管理</text>
+
+    <!-- 底部悬浮操作：搜索 / 新建 -->
+    <img static src="/common/images/search.png" @click="goSearch" class="fab fab--search" />
+    <img static src="/common/images/plus.png" @click="goNew" class="fab fab--add" />
+
+  </div>
+</template>
+
+<script>
+import router from '@system.router'
+import app from '@system.app'
+import { onTimeChange, offTimeChange } from '../../common/clock.js'
+import pageAnim from '../../common/utils/pageAnim.js'
+import appState from '../../common/utils/appState.js'
+import { shortPath } from '../../common/utils/format.js'
+
+export default {
+  private: {
+    animStyle: pageAnim.enterStyle,
+    nowTime: '00:00',
+    __unsubClock: null,
+    backendOnline: false,
+    backendText: '正在连接 Lua 表盘…',
+    allItems: [],
+    visibleItems: [],
+    pressedId: '',
+    isNavigating: false
+  },
+
+  onInit() {
+    this.__unsubClock = onTimeChange((t) => {
+      if (this.$valid) this.nowTime = t
+    })
+    this.buildItems()
+    this.refreshBackend()
+  },
+
+  onShow() {
+    pageAnim.playReturn(this)
+    this.isNavigating = false
+    this.pressedId = ''
+    this.buildItems()
+    this.refreshBackend()
+  },
+
+  onDestroy() {
+    if (this.__unsubClock) {
+      offTimeChange(this.__unsubClock)
+      this.__unsubClock = null
+    }
+  },
+
+  buildItems() {
+    const state = this.$app.$def ? this.$app.$def.state : appState
+    const items = [
+      {
+        id: 'storage',
+        name: '设备存储',
+        subtitle: '浏览 /data 等系统目录',
+        icon: '/common/images/ic_root.png',
+        action: 'browse',
+        path: '/data'
+      },
+      {
+        id: 'mine',
+        name: '我的文件',
+        subtitle: shortPath('/data/quickapp/files/com.vultra.fmanager/'),
+        icon: '/common/images/ic_folder.png',
+        action: 'browse',
+        path: '/data/quickapp/files/com.vultra.fmanager'
+      },
+      {
+        id: 'last',
+        name: '继续浏览',
+        subtitle: shortPath(state.lastPath || '/data'),
+        icon: '/common/images/ic_folder.png',
+        action: 'browse',
+        path: state.lastPath || '/data'
+      }
+    ]
+    this.allItems = items
+    this.visibleItems = items
+  },
+
+  refreshBackend() {
+    const bridge = this.$app.$def ? this.$app.$def.bridge : null
+    if (!bridge) return
+    bridge.refreshBackend().then((s) => {
+      if (!this.$valid) return
+      this.backendOnline = s.online
+      if (s.online && s.info) {
+        this.backendText = '表盘后端在线 · ' + (s.info.product || '设备')
+        appState.setBackend(true, s.info)
+      } else {
+        this.backendText = '未检测到表盘后端，请先安装并启用 Lua 表盘'
+        appState.setBackend(false, null)
+      }
+    }).catch((e) => {
+      if (!this.$valid) return
+      this.backendOnline = false
+      this.backendText = '后端检测失败：' + (e && e.message ? e.message : e)
+    })
+  },
+
+  onItemClick(item) {
+    if (this.isNavigating || !item) return
+    this.isNavigating = true
+    this.pressedId = item.id
+    const that = this
+    setTimeout(function () {
+      if (!that.$valid) return
+      that.pressedId = ''
+      that.goItem(item)
+    }, pageAnim.pressMs)
+  },
+
+  goItem(item) {
+    if (item.action === 'browse') {
+      router.push({ uri: '/pages/files', params: { path: item.path } })
+      return
+    }
+    router.push({ uri: '/' + item.action })
+  },
+
+  goSearch() {
+    router.push({ uri: '/pages/search' })
+  },
+
+  goNew() {
+    router.push({ uri: '/pages/newItem', params: { mode: 'folder', path: this.$app.$def.state.lastPath } })
+  },
+
+  goSettings() {
+    router.push({ uri: '/pages/settings' })
+  },
+
+  exitApp() {
+    app.terminate()
+  },
+
+  onSwipe(e) {
+    if (e.direction === 'right') app.terminate()
+  },
+
+  onBackPress() {
+    app.terminate()
+    return true
+  }
+}
+</script>
+
+<style>
+  @import '../../common/style.css';
+  .list-padding {
+    height: 90px;
+    width: 100%;
+  }
+</style>
